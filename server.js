@@ -11,66 +11,46 @@ app.use(cors());
 
 function parseChannels() {
   if (!fs.existsSync(FILE)) {
-    throw new Error("channels.txt not found in project root");
+    throw new Error("channels.txt not found");
   }
 
-  const content = fs.readFileSync(FILE, "utf8")
+  const text = fs.readFileSync(FILE, "utf8")
     .replace(/^\uFEFF/, "");
 
-  const lines = content.split(/\r?\n/);
-  const channels = [];
-  let current = null;
+  const blocks = text
+    .split(/^-{10,}\s*$/m)
+    .map(block => block.trim())
+    .filter(Boolean);
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
+  return blocks.map(block => {
+    const get = (regex) => {
+      const match = block.match(regex);
+      return match ? match[1].trim() : null;
+    };
 
-    if (line.startsWith("#EXTINF")) {
-      const comma = line.lastIndexOf(",");
-      const info = comma >= 0 ? line.slice(0, comma) : line;
-      const name = comma >= 0 ? line.slice(comma + 1).trim() : "";
+    const nameMatch = block.match(
+      /^Channel:\s*(.*?)\s*\(ID:\s*(\d+)\)\s*$/m
+    );
 
-      const getAttr = (key) => {
-        const match = info.match(
-          new RegExp(`(?:^|\\s)${key}="([^"]*)"`)
-        );
-        return match ? match[1] : null;
-      };
+    if (!nameMatch) return null;
 
-      current = {
-        name,
-        logo: getAttr("tvg-logo"),
-        channelId: getAttr("tvg-id"),
-        group: getAttr("group-title"),
-        attributes: {}
-      };
-
-      const attrRegex = /([\w-]+)="([^"]*)"/g;
-      let match;
-
-      while ((match = attrRegex.exec(info)) !== null) {
-        current.attributes[match[1]] = match[2];
-      }
-
-      continue;
-    }
-
-    if (line.startsWith("#")) continue;
-
-    if (/^https?:\/\//i.test(line) && current) {
-      current.url = line;
-      channels.push(current);
-      current = null;
-    }
-  }
-
-  return channels;
+    return {
+      name: nameMatch[1].trim(),
+      id: Number(nameMatch[2]),
+      time: get(/^Time:\s*(.+)$/m),
+      mpdUrl: get(/^MPD URL:\s*\r?\n([^\r\n]+)/m),
+      hasCookie: /^Cookie:\s*$/m.test(block),
+      hasLicenseUrl: /^License URL:\s*$/m.test(block),
+      hasKeys: /^Keys:\s*$/m.test(block),
+      hasClearKeyJson: /^ClearKey JSON:\s*$/m.test(block)
+    };
+  }).filter(Boolean);
 }
 
 app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: "Channel JSON API is running"
+    message: "Channel API is running"
   });
 });
 
@@ -78,32 +58,31 @@ app.get("/api/channels", (req, res) => {
   try {
     const channels = parseChannels();
 
-    res.set("Cache-Control", "public, max-age=60");
+    res.set("Cache-Control", "no-store");
     res.json({
       success: true,
       total: channels.length,
       channels
     });
   } catch (error) {
+    console.error(error.message);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: "Unable to parse channels.txt"
     });
   }
 });
 
 app.get("/api/channels/count", (req, res) => {
   try {
-    const channels = parseChannels();
-
     res.json({
       success: true,
-      total: channels.length
+      total: parseChannels().length
     });
-  } catch (error) {
+  } catch {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: "Unable to read channel data"
     });
   }
 });
